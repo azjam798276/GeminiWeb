@@ -5,7 +5,6 @@ import re
 import secrets as secrets_module
 import uuid
 from dataclasses import dataclass
-from typing import Iterable
 
 
 @dataclass(frozen=True)
