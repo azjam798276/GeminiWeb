@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
 from .crypto import decrypt_bytes, encrypt_bytes
 
 
 @dataclass(frozen=True)
 class StoredCredentials:
-    payload: dict
+    payload: dict[str, Any]
 
 
 class EncryptedCredentialStore:
@@ -38,5 +39,4 @@ class EncryptedCredentialStore:
         payload = json.loads(raw.decode("utf-8"))
         if not isinstance(payload, dict):
             raise ValueError("Credential payload must be a JSON object.")
-        return StoredCredentials(payload=payload)
-
+        return StoredCredentials(payload=cast(dict[str, Any], payload))
