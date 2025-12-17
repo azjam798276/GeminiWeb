@@ -92,3 +92,4 @@ Console script (installed via `pip`):
 ```bash
 geminiweb-safe-provider
 ```
+
