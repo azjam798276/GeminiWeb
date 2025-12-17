@@ -4,8 +4,16 @@ import asyncio
 import re
 import secrets as secrets_module
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Any, TYPE_CHECKING, TypeAlias
+
+if TYPE_CHECKING:
+    from starlette.requests import Request
+    from starlette.responses import Response
+    from starlette.types import ASGIApp
+
+CallNext: TypeAlias = Callable[["Request"], Awaitable["Response"]]
 
 
 @dataclass(frozen=True)
@@ -56,7 +64,7 @@ def _should_set_no_store(path: str) -> bool:
     return path.startswith("/v1/")
 
 
-def install_middlewares(app, *, cfg) -> None:
+def install_middlewares(app: Any, *, cfg: Any) -> None:
     """
     Install security middleware and optional hardening based on cfg.
 
@@ -64,12 +72,11 @@ def install_middlewares(app, *, cfg) -> None:
     """
     from fastapi.responses import JSONResponse
     from starlette.middleware.base import BaseHTTPMiddleware
-    from starlette.requests import Request
 
     from .openai_compat import make_openai_error_response
 
     class RequestIdMiddleware(BaseHTTPMiddleware):
-        async def dispatch(self, request: Request, call_next):
+        async def dispatch(self, request: Request, call_next: CallNext) -> Response:
             request_id = coerce_request_id(request.headers.get("x-request-id"))
             request.state.request_id = request_id
             try:
@@ -78,7 +85,6 @@ def install_middlewares(app, *, cfg) -> None:
                 structlog.contextvars.bind_contextvars(request_id=request_id)
             except Exception:  # pragma: no cover
                 pass
-            response = None
             try:
                 response = await call_next(request)
             finally:
@@ -88,12 +94,11 @@ def install_middlewares(app, *, cfg) -> None:
                     structlog.contextvars.clear_contextvars()
                 except Exception:  # pragma: no cover
                     pass
-            if response is not None:
-                response.headers.setdefault("X-Request-Id", request_id)
+            response.headers.setdefault("X-Request-Id", request_id)
             return response
 
     class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-        async def dispatch(self, request: Request, call_next):
+        async def dispatch(self, request: Request, call_next: CallNext) -> Response:
             response = await call_next(request)
             response.headers.setdefault("X-Content-Type-Options", "nosniff")
             response.headers.setdefault("X-Frame-Options", "DENY")
@@ -108,7 +113,7 @@ def install_middlewares(app, *, cfg) -> None:
             return response
 
     class MaxBodySizeMiddleware(BaseHTTPMiddleware):
-        async def dispatch(self, request: Request, call_next):
+        async def dispatch(self, request: Request, call_next: CallNext) -> Response:
             limit = int(getattr(cfg, "max_request_body_bytes", 0) or 0)
             if limit > 0 and request.method in ("POST", "PUT", "PATCH") and _is_protected_path(
                 request.url.path
@@ -136,11 +141,11 @@ def install_middlewares(app, *, cfg) -> None:
             return await call_next(request)
 
     class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
-        def __init__(self, app_):
+        def __init__(self, app_: ASGIApp):
             super().__init__(app_)
             self._sem = asyncio.Semaphore(max(1, int(getattr(cfg, "max_inflight_requests", 1) or 1)))
 
-        async def dispatch(self, request: Request, call_next):
+        async def dispatch(self, request: Request, call_next: CallNext) -> Response:
             if not _is_protected_path(request.url.path):
                 return await call_next(request)
             if self._sem.locked():
@@ -159,7 +164,7 @@ def install_middlewares(app, *, cfg) -> None:
                 self._sem.release()
 
     class BearerAuthMiddleware(BaseHTTPMiddleware):
-        async def dispatch(self, request: Request, call_next):
+        async def dispatch(self, request: Request, call_next: CallNext) -> Response:
             expected = getattr(cfg, "server_auth_token", None)
             if not expected or not _is_protected_path(request.url.path) or request.method == "OPTIONS":
                 return await call_next(request)

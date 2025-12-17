@@ -54,7 +54,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install -U pip
-          python -m pip install -e ".[dev]"
+          python -m pip install -e ".[dev,server]"
       - name: Ruff
         run: ruff check .
       - name: Mypy

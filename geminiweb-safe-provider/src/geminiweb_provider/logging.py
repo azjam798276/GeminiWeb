@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from collections.abc import Callable, Mapping, MutableMapping
+from typing import Any, TypeAlias, cast
 
 import structlog
 
@@ -24,6 +25,9 @@ _SENSITIVE_KEYS = {
 
 
 _BEARER_RE = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9._-]{6,})")
+
+ProcessorReturn: TypeAlias = Mapping[str, Any] | str | bytes | bytearray | tuple[Any, ...]
+Processor: TypeAlias = Callable[[Any, str, MutableMapping[str, Any]], ProcessorReturn]
 
 
 def _redact_str(value: str, *, secrets: list[str]) -> str:
@@ -58,11 +62,11 @@ def _redact_obj(obj: Any, *, secrets: list[str]) -> Any:
     return obj
 
 
-def _make_redaction_processor(*, secrets: list[str]):
+def _make_redaction_processor(*, secrets: list[str]) -> Processor:
     secrets_norm = [s for s in secrets if isinstance(s, str) and s]
 
-    def _processor(_logger, _method_name: str, event_dict: dict[str, Any]) -> dict[str, Any]:
-        return _redact_obj(event_dict, secrets=secrets_norm)
+    def _processor(_logger: Any, _method_name: str, event_dict: MutableMapping[str, Any]) -> ProcessorReturn:
+        return cast(dict[str, Any], _redact_obj(event_dict, secrets=secrets_norm))
 
     return _processor
 
@@ -70,19 +74,19 @@ def _make_redaction_processor(*, secrets: list[str]):
 def configure_logging(level: str = "INFO", fmt: str = "json", *, secrets: list[str] | None = None) -> None:
     logging.basicConfig(level=getattr(logging, level.upper(), logging.INFO))
 
-    processors = [
-        structlog.contextvars.merge_contextvars,
-        structlog.processors.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
+    processors: list[Processor] = [
+        cast(Processor, structlog.contextvars.merge_contextvars),
+        cast(Processor, structlog.processors.add_log_level),
+        cast(Processor, structlog.processors.TimeStamper(fmt="iso")),
     ]
 
     if secrets:
         processors.append(_make_redaction_processor(secrets=secrets))
 
     if fmt == "json":
-        processors.append(structlog.processors.JSONRenderer())
+        processors.append(cast(Processor, structlog.processors.JSONRenderer()))
     else:
-        processors.append(structlog.dev.ConsoleRenderer())
+        processors.append(cast(Processor, structlog.dev.ConsoleRenderer()))
 
     structlog.configure(
         processors=processors,

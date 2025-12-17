@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
 
 from .config import GeminiProviderConfig
 from .errors import (
@@ -31,10 +33,15 @@ from .router_contracts import CompletionIntent
 from .streaming import openai_sse_from_text_stream
 from .http_security import install_middlewares
 
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+    from fastapi.responses import JSONResponse, StreamingResponse
+    from starlette.requests import Request
 
-def create_app(cfg: GeminiProviderConfig | None = None, provider: GeminiProvider | None = None):
+
+def create_app(cfg: GeminiProviderConfig | None = None, provider: GeminiProvider | None = None) -> FastAPI:
     try:
-        from fastapi import FastAPI
+        from fastapi import FastAPI as _FastAPI
         from fastapi.responses import JSONResponse
     except ImportError as e:  # pragma: no cover
         raise RuntimeError('Install the "server" extra: pip install -e ".[server]"') from e
@@ -47,7 +54,7 @@ def create_app(cfg: GeminiProviderConfig | None = None, provider: GeminiProvider
     )
     provider = provider or GeminiProvider(cfg)
 
-    def _request_id(request) -> str | None:
+    def _request_id(request: Request) -> str | None:
         return getattr(getattr(request, "state", None), "request_id", None)
 
     def _observe(path: str, status_code: int, started_at: float) -> None:
@@ -55,14 +62,14 @@ def create_app(cfg: GeminiProviderConfig | None = None, provider: GeminiProvider
         server_request_latency_seconds.labels(path=path).observe(max(0.0, time.monotonic() - started_at))
 
     @asynccontextmanager
-    async def lifespan(_app: FastAPI):
+    async def lifespan(_app: _FastAPI) -> AsyncIterator[None]:
         maybe_start_metrics(enable=cfg.enable_metrics, bind=cfg.metrics_bind, port=cfg.metrics_port)
         try:
             yield
         finally:
             await provider.session.close()
 
-    app = FastAPI(
+    app: _FastAPI = _FastAPI(
         title="geminiweb-safe-provider",
         version="0.1.0",
         lifespan=lifespan,
@@ -73,7 +80,7 @@ def create_app(cfg: GeminiProviderConfig | None = None, provider: GeminiProvider
     install_middlewares(app, cfg=cfg)
 
     @app.exception_handler(AuthenticationError)
-    async def _auth_error_handler(_request, exc: AuthenticationError):
+    async def _auth_error_handler(_request: Request, exc: AuthenticationError) -> JSONResponse:
         server_errors_total.labels(type="authentication_error").inc()
         return JSONResponse(
             status_code=401,
@@ -85,7 +92,7 @@ def create_app(cfg: GeminiProviderConfig | None = None, provider: GeminiProvider
         )
 
     @app.exception_handler(RateLimitError)
-    async def _rate_limit_error_handler(_request, exc: RateLimitError):
+    async def _rate_limit_error_handler(_request: Request, exc: RateLimitError) -> JSONResponse:
         server_errors_total.labels(type="rate_limit_error").inc()
         headers = {}
         if exc.retry_after_seconds is not None:
@@ -101,7 +108,7 @@ def create_app(cfg: GeminiProviderConfig | None = None, provider: GeminiProvider
         )
 
     @app.exception_handler(CircuitBreakerOpenError)
-    async def _circuit_open_handler(_request, exc: CircuitBreakerOpenError):
+    async def _circuit_open_handler(_request: Request, exc: CircuitBreakerOpenError) -> JSONResponse:
         server_errors_total.labels(type="circuit_breaker_open").inc()
         headers = {}
         if exc.retry_after_seconds is not None:
@@ -117,7 +124,7 @@ def create_app(cfg: GeminiProviderConfig | None = None, provider: GeminiProvider
         )
 
     @app.exception_handler(ConfigurationError)
-    async def _config_error_handler(_request, exc: ConfigurationError):
+    async def _config_error_handler(_request: Request, exc: ConfigurationError) -> JSONResponse:
         server_errors_total.labels(type="invalid_request_error").inc()
         return JSONResponse(
             status_code=400,
@@ -129,7 +136,7 @@ def create_app(cfg: GeminiProviderConfig | None = None, provider: GeminiProvider
         )
 
     @app.exception_handler(UpstreamProtocolError)
-    async def _upstream_error_handler(_request, exc: UpstreamProtocolError):
+    async def _upstream_error_handler(_request: Request, exc: UpstreamProtocolError) -> JSONResponse:
         server_errors_total.labels(type="upstream_error").inc()
         return JSONResponse(
             status_code=502,
@@ -141,7 +148,7 @@ def create_app(cfg: GeminiProviderConfig | None = None, provider: GeminiProvider
         )
 
     @app.exception_handler(RequestTimeoutError)
-    async def _timeout_error_handler(_request, exc: RequestTimeoutError):
+    async def _timeout_error_handler(_request: Request, exc: RequestTimeoutError) -> JSONResponse:
         server_errors_total.labels(type="timeout").inc()
         return JSONResponse(
             status_code=504,
@@ -153,7 +160,7 @@ def create_app(cfg: GeminiProviderConfig | None = None, provider: GeminiProvider
         )
 
     @app.exception_handler(UnsupportedFeatureError)
-    async def _unsupported_feature_handler(_request, exc: UnsupportedFeatureError):
+    async def _unsupported_feature_handler(_request: Request, exc: UnsupportedFeatureError) -> JSONResponse:
         server_errors_total.labels(type="invalid_request_error").inc()
         return JSONResponse(
             status_code=400,
@@ -165,7 +172,7 @@ def create_app(cfg: GeminiProviderConfig | None = None, provider: GeminiProvider
         )
 
     @app.exception_handler(ProviderError)
-    async def _provider_error_handler(_request, exc: ProviderError):
+    async def _provider_error_handler(_request: Request, exc: ProviderError) -> JSONResponse:
         server_errors_total.labels(type="api_error").inc()
         return JSONResponse(
             status_code=500,
@@ -181,7 +188,7 @@ def create_app(cfg: GeminiProviderConfig | None = None, provider: GeminiProvider
         return {"status": "ok"}
 
     @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
-    async def chat_completions(req: ChatCompletionRequest):
+    async def chat_completions(req: ChatCompletionRequest) -> ChatCompletionResponse | StreamingResponse:
         started_at = time.monotonic()
         if len(req.messages) > cfg.max_messages:
             raise ConfigurationError("Too many messages.")
@@ -204,7 +211,7 @@ def create_app(cfg: GeminiProviderConfig | None = None, provider: GeminiProvider
             )
             text_stream = provider.stream(intent)
 
-            async def _deadline_stream():
+            async def _deadline_stream() -> AsyncIterator[str]:
                 it = text_stream.__aiter__()
                 try:
                     loop = asyncio.get_running_loop()

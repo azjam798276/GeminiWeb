@@ -4,6 +4,7 @@ import asyncio
 import random
 import json
 import time
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -38,8 +39,8 @@ class GeminiOfficialSession:
         backoff_max_seconds: float = 8.0,
         circuit_breaker_failures: int = 5,
         circuit_breaker_reset_seconds: float = 30.0,
-        sleeper: Any = None,
-        clock: Any = None,
+        sleeper: Callable[[float], Awaitable[None]] | None = None,
+        clock: Callable[[], float] | None = None,
     ):
         self.api_key = api_key
         self._client = client or httpx.AsyncClient(timeout=timeout_seconds)
@@ -48,8 +49,8 @@ class GeminiOfficialSession:
         self._max_attempts = max(1, max_attempts)
         self._backoff_initial_seconds = max(0.0, backoff_initial_seconds)
         self._backoff_max_seconds = max(self._backoff_initial_seconds, backoff_max_seconds)
-        self._sleep = sleeper or asyncio.sleep
-        self._clock = clock or time.monotonic
+        self._sleep: Callable[[float], Awaitable[None]] = sleeper or asyncio.sleep
+        self._clock: Callable[[], float] = clock or time.monotonic
 
         self._cb_threshold = max(0, int(circuit_breaker_failures))
         self._cb_reset_seconds = max(0.0, float(circuit_breaker_reset_seconds))
@@ -95,9 +96,9 @@ class GeminiOfficialSession:
 
     def _compute_backoff(self, attempt_index: int) -> float:
         # attempt_index: 0-based retry count (0 for first retry)
-        base = min(self._backoff_max_seconds, self._backoff_initial_seconds * (2**attempt_index))
+        base = float(min(self._backoff_max_seconds, self._backoff_initial_seconds * (2**attempt_index)))
         # Add small jitter to avoid synchronized retries
-        jitter = random.uniform(0.0, min(0.25, base * 0.1)) if base > 0 else 0.0
+        jitter = float(random.uniform(0.0, min(0.25, base * 0.1))) if base > 0 else 0.0
         return base + jitter
 
     async def generate_chat(
@@ -248,7 +249,7 @@ class GeminiOfficialSession:
         stop: str | list[str] | None = None,
         presence_penalty: float | None = None,
         frequency_penalty: float | None = None,
-    ):
+    ) -> AsyncIterator[str]:
         self._circuit_allow()
 
         if not self.api_key:

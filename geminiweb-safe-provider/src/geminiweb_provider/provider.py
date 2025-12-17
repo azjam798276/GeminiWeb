@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import AsyncIterator
 from typing import Any
 
 import structlog
@@ -92,7 +93,7 @@ class GeminiProvider:
             log.exception("provider_error", provider=provider, error=str(e))
             raise
 
-    async def stream(self, intent: CompletionIntent):
+    async def stream(self, intent: CompletionIntent) -> AsyncIterator[str]:
         if not self.cfg.enable_streaming:
             raise UnsupportedFeatureError("Streaming is disabled (set ENABLE_STREAMING=true).")
         system_instruction, chat_messages = self._split_messages(intent.messages)
