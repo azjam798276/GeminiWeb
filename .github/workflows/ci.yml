@@ -6,7 +6,6 @@ on:
       - "geminiweb-safe-provider/**"
       - ".github/workflows/**"
   push:
-    branches: ["main"]
     paths:
       - "geminiweb-safe-provider/**"
       - ".github/workflows/**"
